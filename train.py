@@ -155,7 +155,7 @@ def train(total_steps=10000):
                     detailed_metrics[f"gate_param_layer_{i}"] = gate_param[i].item()
                     if i < len(gate_values):
                         detailed_metrics[f"training_gate_layer_{i}"] = gate_values[i]
-                    detailed_metrics[f"inference_gate_layer_{i}"] = inference_gates[i].item()
+                    # Note: inference_gate can be computed from gate_param_layer > 0, so we don't log it
                 mlflow.log_metrics(detailed_metrics, step=step)
 
             print(
