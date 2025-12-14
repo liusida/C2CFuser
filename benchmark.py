@@ -53,7 +53,7 @@ def benchmark(
         tokenizer=tokenizer,
     )
     c2c_model.eval()
-    c2c_model.c2c.sanity_check = True  # Enable sanity check to just evaluate the receiver raw model
+    c2c_model.c2c.sanity_check = False  # Enable sanity check to just evaluate the receiver raw model
 
     if verbose:
         print(f"Checkpoint loaded: step={metadata['step']}, loss={metadata['loss']:.4f}")
@@ -170,8 +170,8 @@ def benchmark(
 
 if __name__ == "__main__":
     benchmark(
-        checkpoint_step=8,
+        checkpoint_step=10000,
         categories=None,
-        max_questions_per_category=10,
-        max_new_tokens=7,
+        max_questions_per_category=None,
+        max_new_tokens=8,
     )

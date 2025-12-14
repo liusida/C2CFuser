@@ -75,8 +75,15 @@ class C2CFuser(nn.Module):
         layer = cache.layers[idx]
         return layer.keys, layer.values
 
-    def forward(self, cache_receiver, cache_sharer):
+    def forward(self, cache_receiver, cache_sharer, return_debug=False):
         fused_keys, fused_values = [], []
+        debug_info = {
+            "gate_values": [],
+            "fused_K_norms": [],
+            "fused_V_norms": [],
+            "K_R_norms": [],
+            "V_R_norms": [],
+        }
 
         Lr, Ls = len(cache_receiver.layers), len(cache_sharer.layers)
         L = min(Lr, Ls, self.num_layers)
@@ -98,13 +105,22 @@ class C2CFuser(nn.Module):
             fused_K = fused_K * self.dw(fused_K)
             fused_V = fused_V * self.dw(fused_V)
 
-            gate = gumbel_sigmoid(self.gate_param[i], self.temperature)
+            if return_debug:
+                debug_info["K_R_norms"].append(K_R.norm().item())
+                debug_info["V_R_norms"].append(V_R.norm().item())
+                debug_info["fused_K_norms"].append(fused_K.norm().item())
+                debug_info["fused_V_norms"].append(fused_V.norm().item())
 
             if self.training:
+                gate = gumbel_sigmoid(self.gate_param[i], self.temperature)
+                if return_debug:
+                    debug_info["gate_values"].append(gate.item())
                 out_K = K_R + gate * fused_K
                 out_V = V_R + gate * fused_V
             else:
-                b = 1 if gate > 0.8 else 0
+                b = 1 if self.gate_param[i] > 0 else 0
+                if return_debug:
+                    debug_info["gate_values"].append(float(b))
                 out_K = K_R + b * fused_K
                 out_V = V_R + b * fused_V
 
@@ -120,11 +136,15 @@ class C2CFuser(nn.Module):
             fused_keys.append(out_K)
             fused_values.append(out_V)
 
-        return rebuild_past_key_values_like_receiver(
+        result = rebuild_past_key_values_like_receiver(
             cache_receiver,
             torch.stack(fused_keys),
             torch.stack(fused_values),
         )
+
+        if return_debug:
+            return result, debug_info
+        return result
 
     def set_temperature(self, temperature: float):
         """Set global gate temperature (useful for annealing from the training loop)."""
@@ -150,12 +170,18 @@ class C2CReceiverForCausalLM(nn.Module):
         for p in model.parameters():
             p.requires_grad = False
 
-    def forward(self, prompt_ids, prompt_mask, resp_ids, resp_mask, labels):
+    def forward(self, prompt_ids, prompt_mask, resp_ids, resp_mask, labels, return_debug=False):
         with torch.no_grad():
             rec = self.receiver(prompt_ids, prompt_mask, use_cache=True)
             sha = self.sharer(prompt_ids, prompt_mask, use_cache=True)
 
-        fused_cache = self.c2c(rec.past_key_values, sha.past_key_values)
+        fused_cache_result = self.c2c(rec.past_key_values, sha.past_key_values, return_debug=return_debug)
+        if return_debug:
+            fused_cache, debug_info = fused_cache_result
+        else:
+            fused_cache = fused_cache_result
+            debug_info = None
+
         full_mask = torch.cat([prompt_mask, resp_mask], dim=1)
 
         out = self.receiver(
@@ -165,6 +191,9 @@ class C2CReceiverForCausalLM(nn.Module):
             labels=labels,
             use_cache=False,
         )
+
+        if return_debug:
+            return out.loss, debug_info
         return out.loss
 
     @torch.no_grad()
