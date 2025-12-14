@@ -169,4 +169,4 @@ def train(total_steps=10000):
 
 
 if __name__ == "__main__":
-    train(total_steps=10000)
+    train(total_steps=500_000)  # as paper claimed.
