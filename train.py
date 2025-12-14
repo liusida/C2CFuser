@@ -32,6 +32,8 @@ def train(total_steps=10000):
     c2c_model.train()
     optimizer = torch.optim.AdamW(c2c_model.c2c.parameters(), lr=lr)
     save_every = 1000
+    log_essential_every = 50
+    log_detailed_every = 500
     temp_start = 1.0
     temp_end = 0.05
 
@@ -46,6 +48,8 @@ def train(total_steps=10000):
                 "temp_start": temp_start,
                 "temp_end": temp_end,
                 "save_every": save_every,
+                "log_essential_every": log_essential_every,
+                "log_detailed_every": log_detailed_every,
             }
         )
 
@@ -89,12 +93,13 @@ def train(total_steps=10000):
             num_active_gates = inference_gates.sum().item()
             active_gate_ratio = num_active_gates / len(gate_param)
 
-            # Get parameter norms
+            # Get parameter norms (only compute if we'll log detailed metrics)
             param_norms = {}
-            for name, param in c2c_model.c2c.named_parameters():
-                if param.grad is not None:
-                    param_norms[f"grad_norm_{name}"] = param.grad.norm().item()
-                param_norms[f"param_norm_{name}"] = param.norm().item()
+            if step % log_detailed_every == 0:
+                for name, param in c2c_model.c2c.named_parameters():
+                    if param.grad is not None:
+                        param_norms[f"grad_norm_{name}"] = param.grad.norm().item()
+                    param_norms[f"param_norm_{name}"] = param.norm().item()
 
             # Get actual training gate values
             gate_values = debug_info["gate_values"]
@@ -113,45 +118,45 @@ def train(total_steps=10000):
 
             optimizer.step()
 
-            # Prepare metrics for logging
-            metrics = {
-                "loss": loss.item(),
-                "temperature": temperature,
-                # Gate parameter statistics
-                "gate_param_mean": gate_param.mean().item(),
-                "gate_param_min": gate_param.min().item(),
-                "gate_param_max": gate_param.max().item(),
-                "gate_param_std": gate_param.std().item(),
-                # Inference gate behavior (critical for debugging!)
-                "inference_active_gates": num_active_gates,
-                "inference_active_gate_ratio": active_gate_ratio,
-                # Training gate values
-                "avg_training_gate_value": avg_gate_value,
-                "min_training_gate_value": min(gate_values) if gate_values else 0.0,
-                "max_training_gate_value": max(gate_values) if gate_values else 0.0,
-                # Gradient information
-                "gate_param_grad_norm": gate_param_grad_norm,
-                # Fused cache contribution
-                "avg_fused_K_norm": avg_fused_K_norm,
-                "avg_fused_V_norm": avg_fused_V_norm,
-                "avg_K_R_norm": avg_K_R_norm,
-                "avg_V_R_norm": avg_V_R_norm,
-                "fused_K_to_K_R_ratio": avg_fused_K_norm / avg_K_R_norm if avg_K_R_norm > 0 else 0.0,
-                "fused_V_to_V_R_ratio": avg_fused_V_norm / avg_V_R_norm if avg_V_R_norm > 0 else 0.0,
-            }
+            # Log essential metrics every N steps
+            if step % log_essential_every == 0:
+                essential_metrics = {
+                    "loss": loss.item(),
+                    "temperature": temperature,
+                    # Gate parameter statistics
+                    "gate_param_mean": gate_param.mean().item(),
+                    "gate_param_min": gate_param.min().item(),
+                    "gate_param_max": gate_param.max().item(),
+                    "gate_param_std": gate_param.std().item(),
+                    # Inference gate behavior (critical for debugging!)
+                    "inference_active_gates": num_active_gates,
+                    "inference_active_gate_ratio": active_gate_ratio,
+                    # Training gate values
+                    "avg_training_gate_value": avg_gate_value,
+                    "min_training_gate_value": min(gate_values) if gate_values else 0.0,
+                    "max_training_gate_value": max(gate_values) if gate_values else 0.0,
+                    # Gradient information
+                    "gate_param_grad_norm": gate_param_grad_norm,
+                    # Fused cache contribution
+                    "avg_fused_K_norm": avg_fused_K_norm,
+                    "avg_fused_V_norm": avg_fused_V_norm,
+                    "avg_K_R_norm": avg_K_R_norm,
+                    "avg_V_R_norm": avg_V_R_norm,
+                    "fused_K_to_K_R_ratio": avg_fused_K_norm / avg_K_R_norm if avg_K_R_norm > 0 else 0.0,
+                    "fused_V_to_V_R_ratio": avg_fused_V_norm / avg_V_R_norm if avg_V_R_norm > 0 else 0.0,
+                }
+                mlflow.log_metrics(essential_metrics, step=step)
 
-            # Add parameter and gradient norms
-            metrics.update(param_norms)
-
-            # Log individual gate parameters
-            for i in range(len(gate_param)):
-                metrics[f"gate_param_layer_{i}"] = gate_param[i].item()
-                if i < len(gate_values):
-                    metrics[f"training_gate_layer_{i}"] = gate_values[i]
-                metrics[f"inference_gate_layer_{i}"] = inference_gates[i].item()
-
-            # Log all metrics to MLflow
-            mlflow.log_metrics(metrics, step=step)
+            # Log detailed metrics only periodically
+            if step % log_detailed_every == 0:
+                detailed_metrics = {}
+                detailed_metrics.update(param_norms)
+                for i in range(len(gate_param)):
+                    detailed_metrics[f"gate_param_layer_{i}"] = gate_param[i].item()
+                    if i < len(gate_values):
+                        detailed_metrics[f"training_gate_layer_{i}"] = gate_values[i]
+                    detailed_metrics[f"inference_gate_layer_{i}"] = inference_gates[i].item()
+                mlflow.log_metrics(detailed_metrics, step=step)
 
             print(
                 f"step {step} | loss {loss.item():.4f} | temp {temperature:.4f} | "
